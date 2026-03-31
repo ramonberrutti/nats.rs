@@ -20,12 +20,16 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::engine::Engine;
 use futures_util::Future;
 use std::fmt::Formatter;
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
-use std::{fmt, path::PathBuf, pin::Pin, time::Duration};
-#[cfg(feature = "nkeys")]
-use std::{path::Path, sync::Arc};
+#[cfg(all(not(target_arch = "wasm32"), feature = "nkeys"))]
+use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+use std::{fmt, pin::Pin, sync::Arc, time::Duration};
 #[cfg(feature = "nkeys")]
 use tokio::io;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_rustls::rustls;
 
 /// Connect options. Used to connect with NATS when custom config is needed.
@@ -41,18 +45,27 @@ use tokio_rustls::rustls;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct ConnectOptions {
     pub(crate) name: Option<String>,
     pub(crate) no_echo: bool,
     pub(crate) max_reconnects: Option<usize>,
     pub(crate) connection_timeout: Duration,
     pub(crate) auth: Auth,
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tls_required: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tls_first: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) certificates: Vec<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) client_cert: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) client_key: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) tls_client_config: Option<rustls::ClientConfig>,
+
     pub(crate) ping_interval: Duration,
     pub(crate) subscription_capacity: usize,
     pub(crate) sender_capacity: usize,
@@ -63,32 +76,39 @@ pub struct ConnectOptions {
     pub(crate) ignore_discovered_servers: bool,
     pub(crate) retain_servers_order: bool,
     pub(crate) read_buffer_capacity: u16,
-    pub(crate) reconnect_delay_callback: Box<dyn Fn(usize) -> Duration + Send + Sync + 'static>,
+    pub(crate) reconnect_delay_callback: Arc<dyn Fn(usize) -> Duration + Send + Sync + 'static>,
     pub(crate) auth_callback: Option<CallbackArg1<Vec<u8>, Result<Auth, AuthError>>>,
     pub(crate) skip_subject_validation: bool,
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) local_address: Option<SocketAddr>,
 }
 
 impl fmt::Debug for ConnectOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        f.debug_map()
+        let mut debug = f.debug_map();
+        debug
             .entry(&"name", &self.name)
             .entry(&"no_echo", &self.no_echo)
             .entry(&"max_reconnects", &self.max_reconnects)
             .entry(&"connection_timeout", &self.connection_timeout)
-            .entry(&"tls_required", &self.tls_required)
-            .entry(&"certificates", &self.certificates)
-            .entry(&"client_cert", &self.client_cert)
-            .entry(&"client_key", &self.client_key)
-            .entry(&"tls_client_config", &"XXXXXXXX")
-            .entry(&"tls_first", &self.tls_first)
             .entry(&"ping_interval", &self.ping_interval)
             .entry(&"sender_capacity", &self.sender_capacity)
             .entry(&"inbox_prefix", &self.inbox_prefix)
             .entry(&"retry_on_initial_connect", &self.retry_on_initial_connect)
             .entry(&"read_buffer_capacity", &self.read_buffer_capacity)
-            .entry(&"skip_subject_validation", &self.skip_subject_validation)
-            .finish()
+            .entry(&"skip_subject_validation", &self.skip_subject_validation);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        debug
+            .entry(&"tls_required", &self.tls_required)
+            .entry(&"certificates", &self.certificates)
+            .entry(&"client_cert", &self.client_cert)
+            .entry(&"client_key", &self.client_key)
+            .entry(&"tls_client_config", &"XXXXXXXX")
+            .entry(&"tls_first", &self.tls_first);
+
+        debug.finish()
     }
 }
 
@@ -99,11 +119,17 @@ impl Default for ConnectOptions {
             no_echo: false,
             max_reconnects: None,
             connection_timeout: Duration::from_secs(5),
+            #[cfg(not(target_arch = "wasm32"))]
             tls_required: false,
+            #[cfg(not(target_arch = "wasm32"))]
             tls_first: false,
+            #[cfg(not(target_arch = "wasm32"))]
             certificates: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             client_cert: None,
+            #[cfg(not(target_arch = "wasm32"))]
             client_key: None,
+            #[cfg(not(target_arch = "wasm32"))]
             tls_client_config: None,
             ping_interval: Duration::from_secs(60),
             sender_capacity: 2048,
@@ -115,12 +141,13 @@ impl Default for ConnectOptions {
             ignore_discovered_servers: false,
             retain_servers_order: false,
             read_buffer_capacity: 65535,
-            reconnect_delay_callback: Box::new(|attempts| {
+            reconnect_delay_callback: Arc::new(|attempts| {
                 connector::reconnect_delay_callback_default(attempts)
             }),
             auth: Default::default(),
             auth_callback: None,
             skip_subject_validation: false,
+            #[cfg(not(target_arch = "wasm32"))]
             local_address: None,
         }
     }
@@ -203,7 +230,7 @@ impl ConnectOptions {
         Fut: Future<Output = std::result::Result<Auth, AuthError>> + 'static + Send + Sync,
     {
         let mut options = ConnectOptions::new();
-        options.auth_callback = Some(CallbackArg1::<Vec<u8>, Result<Auth, AuthError>>(Box::new(
+        options.auth_callback = Some(CallbackArg1::<Vec<u8>, Result<Auth, AuthError>>(Arc::new(
             move |nonce| Box::pin(callback(nonce)),
         )));
         options
@@ -390,7 +417,7 @@ impl ConnectOptions {
     {
         let sign_cb = Arc::new(sign_cb);
 
-        let jwt_sign_callback = CallbackArg1(Box::new(move |nonce: String| {
+        let jwt_sign_callback = CallbackArg1(Arc::new(move |nonce: String| {
             let sign_cb = sign_cb.clone();
             Box::pin(async move {
                 let sig = sign_cb(nonce.as_bytes().to_vec())
@@ -422,6 +449,7 @@ impl ConnectOptions {
     /// ```
     #[cfg(feature = "nkeys")]
     #[cfg_attr(docsrs, doc(cfg(feature = "nkeys")))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn with_credentials_file(path: impl AsRef<Path>) -> io::Result<Self> {
         let cred_file_contents = crate::auth_utils::load_creds(path.as_ref()).await?;
         Self::with_credentials(&cred_file_contents)
@@ -445,6 +473,7 @@ impl ConnectOptions {
     /// ```
     #[cfg(feature = "nkeys")]
     #[cfg_attr(docsrs, doc(cfg(feature = "nkeys")))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn credentials_file(self, path: impl AsRef<Path>) -> io::Result<Self> {
         let cred_file_contents = crate::auth_utils::load_creds(path.as_ref()).await?;
         self.credentials(&cred_file_contents)
@@ -536,6 +565,7 @@ impl ConnectOptions {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn add_root_certificates(mut self, path: PathBuf) -> ConnectOptions {
         self.certificates = vec![path];
         self
@@ -554,6 +584,7 @@ impl ConnectOptions {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn add_client_certificate(mut self, cert: PathBuf, key: PathBuf) -> ConnectOptions {
         self.client_cert = Some(cert);
         self.client_key = Some(key);
@@ -573,6 +604,7 @@ impl ConnectOptions {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn require_tls(mut self, is_required: bool) -> ConnectOptions {
         self.tls_required = is_required;
         self
@@ -581,6 +613,7 @@ impl ConnectOptions {
     /// Changes how tls connection is established. If `tls_first` is set,
     /// client will try to establish tls before getting info from the server.
     /// That requires the server to enable `handshake_first` option in the config.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn tls_first(mut self) -> ConnectOptions {
         self.tls_first = true;
         self.tls_required = true;
@@ -747,7 +780,7 @@ impl ConnectOptions {
         F: Fn(Event) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + 'static + Send + Sync,
     {
-        self.event_callback = Some(CallbackArg1::<Event, ()>(Box::new(move |event| {
+        self.event_callback = Some(CallbackArg1::<Event, ()>(Arc::new(move |event| {
             Box::pin(cb(event))
         })));
         self
@@ -773,7 +806,7 @@ impl ConnectOptions {
     where
         F: Fn(usize) -> Duration + Send + Sync + 'static,
     {
-        self.reconnect_delay_callback = Box::new(cb);
+        self.reconnect_delay_callback = Arc::new(cb);
         self
     }
 
@@ -936,6 +969,7 @@ impl ConnectOptions {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn tls_client_config(mut self, config: rustls::ClientConfig) -> ConnectOptions {
         self.tls_client_config = Some(config);
         self
@@ -987,6 +1021,7 @@ impl ConnectOptions {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn local_address(mut self, address: SocketAddr) -> ConnectOptions {
         self.local_address = Some(address);
         self
@@ -994,8 +1029,9 @@ impl ConnectOptions {
 }
 
 pub(crate) type AsyncCallbackArg1<A, T> =
-    Box<dyn Fn(A) -> Pin<Box<dyn Future<Output = T> + Send + Sync + 'static>> + Send + Sync>;
+    Arc<dyn Fn(A) -> Pin<Box<dyn Future<Output = T> + Send + Sync + 'static>> + Send + Sync>;
 
+#[derive(Clone)]
 pub(crate) struct CallbackArg1<A, T>(AsyncCallbackArg1<A, T>);
 
 impl<A, T> CallbackArg1<A, T> {
